@@ -1,0 +1,358 @@
+---
+title: "Networks_analysis"
+author: "Kaitlyn Lee"
+date: "03-07-2023"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages and data
+```{r, warning=FALSE, message=FALSE}
+# clear R environment 
+# rm(list = ls())
+
+library(pacman)
+p_load(tidyverse, ggpubr, dplyr, stringr, readxl, pdftools, tm, writexl, pdfsearch, quanteda, NLP, wordcloud, wordcloud2, RColorBrewer, stargazer, texreg, weights, tidytext) 
+
+# load in partnering orgs
+partner <- read.csv("Data/Partnering_Orgs.csv")
+partner$partnering <- 1
+
+# load in non-partnering orgs
+non_partner <- read.csv("Data/NonPartnering_Orgs.csv")
+non_partner$partnering <- 0
+
+# combine partner + non_partner
+all_orgs <- rbind(partner, non_partner)
+
+# load in mission statements
+mission_statements <- read.csv("Data/MS_Full.csv")
+mission_statements$mentity <- mission_statements$mngentity
+
+# keep only non-duplicates in mission_statements (looks like there is one mentity duplicate here)
+mission_statements <- mission_statements[!duplicated(mission_statements$mentity), ]
+
+# merge mission statements 
+ms <- merge(mission_statements, all_orgs, by="mentity") # should be 1144 obs.
+
+ms <- ms %>% filter(X.Mission.Statement..!="") # keep only orgs with stated mission statements
+```
+
+# Pull weights from excel sheets
+```{r, warning=FALSE, message=FALSE}
+# Load in total area protected (partnering and non-partnering)
+area <- read_excel('Data/CA_orgs_unit_area.xlsx')
+
+area <- area %>% group_by(mngentity) %>% summarise(tot_area=sum(acres_total))
+
+ms <- merge(ms, area, by="mngentity")
+
+area <- data.frame(mngentity = ms$mngentity, tot_area = ms$tot_area, partnering = ms$partnering)
+
+# Pull n PAs
+n <- read_excel('Data/CA_orgs_nUnits.xlsx')
+
+vars_keep <- c("mngentity", "units")
+n <- n[,(names(n) %in% vars_keep)] # keep only needed vars
+
+area <- merge(area, n, by="mngentity")
+
+area <- area %>% filter(mngentity %in% ms$mentity) # keep only orgs with stated mission statements
+
+```
+
+# Pull themes
+```{r, warning=FALSE, message=FALSE}
+# Load and clean Emily's themes
+themes <- read_excel('Themes_KeyPhrases_final.xlsx')
+keep <- 2:21
+themes = themes[keep,] #keep only 2-24
+
+ecology_theme <- themes$`Ecology/Consvervation`
+social_theme <- themes$Socioeconomic[1:19]
+social_theme <- c(social_theme, "recreat opportun")
+```
+
+# Text mining - all phrases
+```{r, warning=FALSE, message=FALSE}
+ms$X.Mission.Statement.. <- str_remove_all(ms$X.Mission.Statement.., "<")
+ms$X.Mission.Statement.. <- str_remove_all(ms$X.Mission.Statement.., ">")
+ms$X.Mission.Statement.. <- str_remove_all(ms$X.Mission.Statement.., "[[:punct:]]")
+ms$X.Mission.Statement.. <-  str_replace_all(ms$X.Mission.Statement.., "[^[:alnum:]]", " ")
+
+# Create a corpus  
+docs <- data.frame(doc_id = ms$mngentity,
+                   text = ms$X.Mission.Statement..,
+                   stringsAsFactors = FALSE)
+docs <- VCorpus(DataframeSource(docs))
+
+# clean text
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(stemDocument)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+BigramTokenizer <-
+  function(x)
+    unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+
+dtm <- DocumentTermMatrix(docs, control=list(tokenize=BigramTokenizer))
+matrix <- as.matrix(dtm) 
+words <- sort(colSums(matrix), decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+phrases <- tidy(dtm)
+
+phrases <- phrases %>% rename(mngentity = document, freq=count, pattern=term)
+
+phrases <- merge(phrases, area, by="mngentity")
+phrases_freq <- phrases
+
+# generate categorical var to use for chi-sq
+duptimes <- phrases$freq
+
+idx <- rep(1:nrow(phrases), duptimes)
+
+phrases <- phrases[idx,]
+
+vars_drop <- c("freq")
+phrases <- phrases[,!(names(phrases) %in% vars_drop)] # keep only needed vars
+```
+
+
+# Create data subsets for the two themes - include observations for orgs. with 0 frequency
+```{r, warning=FALSE, message=FALSE}
+##### Ecology theme #####
+phrases_ecology <- phrases_freq
+phrases_ecology <- phrases_ecology %>% filter(phrases_ecology$pattern %in% ecology_theme)
+
+# calculate average freq for ALL WORDS in the theme for partnering and non-partnering by mngentity
+phrases_ecology <- phrases_ecology %>% group_by(mngentity, partnering, tot_area, units) %>% summarise(freq = sum(freq))
+  
+phrases_ecology$freq <- as.double(phrases_ecology$freq)
+
+# add freq of 0 for orgs that do not use these
+no_ecology <- area[which(!area$mngentity %in% phrases_ecology$mngentity),]
+no_ecology$freq <- 0
+no_ecology$freq <- as.double(no_ecology$freq)
+
+phrases_ecology <- rbind(phrases_ecology, no_ecology)
+
+##### Social theme #####
+phrases_social <- phrases_freq
+phrases_social <- phrases_social %>% filter(phrases_social$pattern %in% social_theme)
+
+# calculate average freq for ALL WORDS in the theme for partnering and non-partnering by mngentity
+phrases_social <- phrases_social %>% group_by(mngentity, partnering, tot_area, units) %>% summarise(freq = sum(freq))
+  
+phrases_social$freq <- as.double(phrases_social$freq)
+
+# add freq of 0 for orgs that do not use these
+no_social <- area[which(!area$mngentity %in% phrases_social$mngentity),]
+no_social$freq <- 0
+no_social$freq <- as.double(no_social$freq)
+
+phrases_social <- rbind(phrases_social, no_social)
+
+
+# Remove FED and PVT orgs
+# phrases_ecology <- phrases_ecology %>% filter(!str_detect(mngentity, "FED"))
+# phrases_social <- phrases_social %>% filter(!str_detect(mngentity, "FED"))
+# 
+# phrases_ecology <- phrases_ecology %>% filter(!str_detect(mngentity, "PVT"))
+# phrases_social <- phrases_social %>% filter(!str_detect(mngentity, "PVT"))
+
+```
+
+
+# Chi-square: all partner vs. all non-partner all key phrase frequency
+* Hypoth test 1: do phrase/word frequencies differ between partnering and non-partnering
+* All phrases frequency chi squared
+* Key result - partnering and non-partnering orgs use phrases with different frequencies, this is statistically significant at the 1% level. This result is robust to both weighting schemes. 
+
+```{r results="asis", warning=FALSE, message=FALSE}
+###### phrases - all #####
+# unweighted 
+phrases_unwtd_partner_nonpartner <- chisq.test(phrases$pattern, phrases$partnering)
+# phrases_unwtd_partner_nonpartner
+
+# tot area weighted
+phrases_totarea_wtd_partner_nonpartner <- wtd.chi.sq(phrases$pattern, phrases$partnering, weight=phrases$tot_area)
+# phrases_totarea_wtd_partner_nonpartner
+
+# N PAs weighted
+phrases_NPAs_wtd_partner_nonpartner <- wtd.chi.sq(phrases$pattern, phrases$partnering, weight=phrases$units)
+# phrases_NPAs_wtd_partner_nonpartner
+
+####### test using contingency table as input #####
+phrase_table <- table(phrases$pattern, phrases$partnering)
+
+# unweighted
+table_phrases_unwtd_partner_nonpartner <- chisq.test(phrase_table)
+# table_phrases_unwtd_partner_nonpartner
+
+# check df should be 1 - # of phrases
+# phrases %>% group_by(pattern) %>% summarise()
+
+
+# Make table 
+coefficient.names <- c("Chi-square", "Degrees of Freedom", "P-value")
+# create the texreg object
+    x1 <- createTexreg(coef.names = coefficient.names,
+    coef = c(phrases_unwtd_partner_nonpartner$statistic, phrases_unwtd_partner_nonpartner$parameter, phrases_unwtd_partner_nonpartner$p.value))
+
+    x2 <- createTexreg(coef.names = coefficient.names,
+    coef = c(phrases_totarea_wtd_partner_nonpartner["Chisq"], phrases_totarea_wtd_partner_nonpartner["df"], phrases_totarea_wtd_partner_nonpartner["p.value"]))
+
+    x3 <- createTexreg(coef.names = coefficient.names,
+    coef = c(phrases_NPAs_wtd_partner_nonpartner["Chisq"], phrases_NPAs_wtd_partner_nonpartner["df"], phrases_NPAs_wtd_partner_nonpartner["p.value"]))
+    
+htmlreg(list(x1, x2, x3), threeparttable = TRUE, custom.model.names = c("Unweighted", "Weighted by Total Area", "Weighted by N PAs"), caption = "Chi-Square Test for Differences in Common Phrases in Partnering and Non-Partnering Mission Statements", caption.above = TRUE, custom.note = "Note: Chi-Square values, degrees of freedom, and p-values reported.")
+```
+
+
+# T-test: all partner vs. all non-partner average theme 
+* phrases associated with themes differ for some themes (conservation) between  non p and p 
+
+* Ecology theme:
+* Key results ecology theme two tailed tests - Partnering and non-partnering orgs use conservation themed words with different freuqencies on avg., unweighted test is stat sig at the 1% level. Weighting by total area is insignificant and weighting by N PAs is stat sig at the 1% level. 
+* Key results ecology theme one tailed tests - Partnering orgs use conservation themed words more on avg., unweighted test is stat sig at the 1% level. For both weighting schemes the difference in means is stat sig, at the 10% level with area weighted and at the 1% level for N PAs weighted.
+
+
+* Social theme:
+* Key results social theme two tailed tests - Partnering and non-partnering orgs use social themed words with different freuqencies on avg., unweighted test is stat sig at the 1% level. This result is robust to both weighting schemes. 
+* Key results social theme one tailed tests - Partnering orgs use social themed words less on avg., this is stat sig at the 1% level. The total area weighted test is insignificant and the sign of the difference changes. Weighted by N PAs gives the same result as the unweighted test, partnering orgs use social themed words less on avge and this is stat sig at 1% level. 
+
+```{r, warning=FALSE, message=FALSE}
+##### Ecology theme #####
+# pull partnering and non partnering groups 
+partner_ecology <- filter(phrases_ecology, partnering==1)
+nonpartner_ecology <- filter(phrases_ecology, partnering==0)
+
+# Conduct t-test for difference in means (two-tailed)
+# unweighted
+ttest_unwtd_ecology <- t.test(partner_ecology$freq, nonpartner_ecology$freq, alternative = c("two.sided"), mu = 0, conf.level = 0.95)
+ttest_unwtd_ecology
+
+ttest_unwtd_ecology_greater <- t.test(partner_ecology$freq, nonpartner_ecology$freq, alternative = c("greater"), mu = 0, conf.level = 0.95)
+ttest_unwtd_ecology_greater
+
+
+# total area weighted
+ttest_wtd_totarea_ecology <- wtd.t.test(partner_ecology$freq, nonpartner_ecology$freq, weight=partner_ecology$tot_area, weighty=nonpartner_ecology$tot_area, alternative = c("two.tailed"))
+ttest_wtd_totarea_ecology
+
+ttest_wtd_totarea_ecology_greater <- wtd.t.test(partner_ecology$freq, nonpartner_ecology$freq, weight=partner_ecology$tot_area, weighty=nonpartner_ecology$tot_area, alternative = c("greater"))
+ttest_wtd_totarea_ecology_greater
+
+# N PAs weighted
+ttest_wtd_units_ecology <- wtd.t.test(partner_ecology$freq, nonpartner_ecology$freq, weight=partner_ecology$units, weighty=nonpartner_ecology$units, alternative = c("two.tailed"))
+ttest_wtd_units_ecology
+
+ttest_wtd_units_ecology_greater <- wtd.t.test(partner_ecology$freq, nonpartner_ecology$freq, weight=partner_ecology$units, weighty=nonpartner_ecology$units, alternative = c("greater"))
+ttest_wtd_units_ecology_greater
+
+##### Social theme #####
+# pull partnering and non partnering groups 
+partner_social <- filter(phrases_social, partnering==1)
+nonpartner_social <- filter(phrases_social, partnering==0)
+
+# Conduct t-test for difference in means (two-tailed)
+# unweighted
+ttest_unwtd_social <- t.test(partner_social$freq, nonpartner_social$freq, alternative = c("two.sided"), mu = 0, conf.level = 0.95)
+ttest_unwtd_social
+
+ttest_unwtd_social_less <- t.test(partner_social$freq, nonpartner_social$freq, alternative = c("less"), mu = 0, conf.level = 0.95)
+ttest_unwtd_social_less
+
+# total area weighted
+ttest_wtd_totarea_social <- wtd.t.test(partner_social$freq, nonpartner_social$freq, weight=partner_social$tot_area, weighty=nonpartner_social$tot_area, alternative = c("two.tailed"))
+ttest_wtd_totarea_social
+
+ttest_wtd_totarea_social_less <- wtd.t.test(partner_social$freq, nonpartner_social$freq, weight=partner_social$tot_area, weighty=nonpartner_social$tot_area, alternative = c("less"))
+ttest_wtd_totarea_social_less
+
+# N PAs weighted
+ttest_wtd_units_social <- wtd.t.test(partner_social$freq, nonpartner_social$freq, weight=partner_social$units,weighty=nonpartner_social$units, alternative = c("two.tailed"))
+ttest_wtd_units_social
+
+ttest_wtd_units_social_less <- wtd.t.test(partner_social$freq, nonpartner_social$freq, weight=partner_social$units,weighty=nonpartner_social$units, alternative = c("less"))
+ttest_wtd_units_social_less
+```
+
+# Chi-square: level composition
+* more NGOs in organizations that partner (chi-squared)
+* Key result - NGO and non-NGO organizations partner with different frequencies, this is stat sig at the 1% level. This result is robust across both weighting schemes. 
+
+```{r results="asis", warning=FALSE, message=FALSE}
+# Assign level
+area$level <- ""
+area$level <- if_else(str_detect(area$mngentity, "NGO"), "NGO", "NON-NGO")
+
+
+# Chisq test
+# unweighted 
+level_unwtd <- chisq.test(area$level, area$partnering)
+# level_unwtd
+
+# tot area weighted
+level_totarea_wtd <- wtd.chi.sq(area$level, area$partnering, weight=area$tot_area)
+# level_totarea_wtd
+
+# N PAs weighted
+level_NPAs_wtd <- wtd.chi.sq(area$level, area$partnering, weight=area$units)
+# level_NPAs_wtd
+
+####### test using contingency table as input #####
+level_table <- table(area$level, area$partnering)
+
+# unweighted
+table_level_unwtd <- chisq.test(level_table)
+# table_level_unwtd
+
+# Make table 
+coefficient.names <- c("Chi-square", "Degrees of Freedom", "P-value")
+# create the texreg object
+    x1 <- createTexreg(coef.names = coefficient.names,
+    coef = c(level_unwtd$statistic, level_unwtd$parameter, level_unwtd$p.value))
+
+    x2 <- createTexreg(coef.names = coefficient.names,
+    coef = c(level_totarea_wtd["Chisq"], level_totarea_wtd["df"], level_totarea_wtd["p.value"]))
+
+    x3 <- createTexreg(coef.names = coefficient.names,
+    coef = c(level_NPAs_wtd["Chisq"], level_NPAs_wtd["df"], level_NPAs_wtd["p.value"]))
+    
+htmlreg(list(x1, x2, x3), threeparttable = TRUE, custom.model.names = c("Unweighted", "Weighted by Total Area", "Weighted by N PAs"), caption = "Chi-Square Test for Frequence of NGOs in Partnering and Non-Partnering Organizations", caption.above = TRUE, custom.note = "Note: Chi-Square values, degrees of freedom, and p-values reported.")
+
+```
+
+# Main result figure
+```{r}
+Theme <- c(rep("Environmental" , 2) , rep("Socioeconomic" , 2))
+Status <- rep(c("Partnering" , "Non-Partnering") , 2)
+Frequency <- c(ttest_unwtd_ecology$estimate['mean of x'], ttest_unwtd_ecology$estimate['mean of y'], ttest_unwtd_social$estimate['mean of x'], ttest_unwtd_social$estimate['mean of y'])
+data <- data.frame(Theme,Status,Frequency)
+
+# Plot social agg t test
+social_ecology_plot <- ggplot(data, aes(fill=Status, y=Frequency, x=Theme)) + 
+  scale_fill_manual(values = rev(RColorBrewer::brewer.pal(2,'Blues'))) +
+  geom_bar(position="dodge", stat="identity") +
+  ggtitle("Average Use of Key Phrases by Theme") +
+  theme(plot.title = element_text(size=22,hjust = 0.5),
+         axis.text=element_text(size=20),
+         axis.title=element_text(size=22), legend.text=element_text(size=20), legend.title=element_text(size=22)) +
+  coord_flip()
+ggsave(social_ecology_plot, file="Output/Figure_SI3.png", width = 10, height = 5, dpi = 200)
+social_ecology_plot
+
+```

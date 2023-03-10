@@ -1,0 +1,99 @@
+---
+title: "Appendix Table 1"
+author: "Kaitlyn Lee"
+date: "03-07-2023"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages and data
+```{r, warning=FALSE, message=FALSE}
+# clear R environment 
+# rm(list = ls())
+
+library(pacman)
+p_load(tidyverse, ggpubr, dplyr, stringr, readxl, pdftools, tm, writexl, pdfsearch, quanteda, NLP, wordcloud, wordcloud2, RColorBrewer, stargazer, texreg, weights, tidytext) 
+
+# load in partnering orgs
+partner <- read.csv("Data/Partnering_Orgs.csv")
+partner$partnering <- 1
+
+# load in non-partnering orgs
+non_partner <- read.csv("Data/NonPartnering_Orgs.csv")
+non_partner$partnering <- 0
+
+# combine partner + non_partner
+all_orgs <- rbind(partner, non_partner)
+
+# load in mission statements
+mission_statements <- read.csv("Data/MS_Full.csv")
+mission_statements$mentity <- mission_statements$mngentity
+
+# keep only non-duplicates in mission_statements (looks like there is one mentity duplicate here)
+mission_statements <- mission_statements[!duplicated(mission_statements$mentity), ]
+
+# merge mission statements 
+ms <- merge(mission_statements, all_orgs, by="mentity") # should be 1144 obs.
+
+# ms <- ms %>% filter(X.Mission.Statement..!="") # keep only orgs with stated mission statements
+```
+
+# Pull area in protection
+```{r, warning=FALSE, message=FALSE}
+# Load in total area protected (partnering and non-partnering)
+area <- read_excel('Data/CA_orgs_unit_area.xlsx')
+
+area <- area %>% group_by(mngentity) %>% summarise(tot_area=sum(acres_total))
+
+ms <- merge(ms, area, by="mngentity")
+ 
+area <- data.frame(mngentity = ms$mngentity, tot_area = ms$tot_area, partnering = ms$partnering)
+
+
+# Pull n PAs
+n <- read_excel('Data/CA_orgs_nUnits.xlsx')
+
+vars_keep <- c("mngentity", "units")
+n <- n[,(names(n) %in% vars_keep)] # keep only needed vars
+
+n_units <- merge(area, n, by="mngentity")
+
+sum(n_units$units)
+
+
+```
+
+# Assign levels
+```{r}
+# Assign level
+area$level <- ""
+area$level <- if_else(str_detect(area$mngentity, "NGO"), "NGO", area$level)
+area$level <- if_else(str_detect(area$mngentity, "LOC"), "LOC", area$level)
+area$level <- if_else(str_detect(area$mngentity, "FED"), "FED", area$level)
+area$level <- if_else(str_detect(area$mngentity, "STAT"), "STAT", area$level)
+area$level <- if_else(str_detect(area$mngentity, "UNK"), "UNK", area$level)
+area$level <- if_else(str_detect(area$mngentity, "PVT"), "PVT", area$level)
+area$level <- if_else(str_detect(area$mngentity, "DIST"), "DIST", area$level)
+```
+
+# Create table A1: % orgs, % area managed, % engaged in partnerships
+```{r}
+# calculate total area in protection:
+total_area_all_orgs <- as.numeric(area %>% summarise(tot_area = sum(tot_area)))
+
+# print summary table
+area %>% group_by(level) %>% summarise(perc_orgs=n()/1144, perc_area = sum(tot_area) / total_area_all_orgs, perc_group_partner = sum(partnering) / n(), perc_all_partner = sum(partnering) / 1144)
+
+# note: "perc_group_partner" is percent partnering within the level. perc_all_partner" is percent partnering relative to the full pop
+
+
+```
+
+

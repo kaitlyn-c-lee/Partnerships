@@ -1,0 +1,215 @@
+---
+title: "Keyword in Context"
+author: "Kaitlyn Lee"
+date: "03-07-2023"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+```{r}
+# clear R environment 
+# rm(list = ls())
+
+library(pacman)
+p_load(tidyverse, ggpubr, dplyr, stringr, readxl, pdftools, tm, writexl, pdfsearch, quanteda, NLP, wordcloud, wordcloud2, RColorBrewer, tidytext, viridis) 
+```
+
+# Load in data and combine excel sheets
+```{r}
+# load in partnering orgs
+partner <- read.csv("Data/Partnering_Orgs.csv")
+partner$partnering <- 1
+
+# load in non-partnering orgs
+non_partner <- read.csv("Data/NonPartnering_Orgs.csv")
+non_partner$partnering <- 0
+
+# load in mission statements
+mission_statements <- read.csv("Data/MS_Full.csv")
+mission_statements$mentity <- mission_statements$mngentity
+
+# check for duplicates in mission_statements mentity
+test <- mission_statements %>%
+  group_by(mentity) %>%
+  filter(n() != 1) %>%
+  ungroup() # drop any full duplicates
+
+# keep only non-duplicates in mission_statements (looks like there is one mentity duplicate here)
+mission_statements <- mission_statements[!duplicated(mission_statements$mentity), ]
+
+# combine partner + non_partner
+all_orgs <- rbind(partner, non_partner)
+
+# check for duplicates in all_orgs mentity, should be 0
+test <- all_orgs %>%
+  group_by(mentity) %>%
+  filter(n() != 1) %>%
+  ungroup() # drop any full duplicates
+
+# merge mission statements 
+all_orgs_ms <- merge(mission_statements, all_orgs, by="mentity") # should be 1144 obs.
+
+# save combined dataset to excel
+filepath = "all_orgs_ms.xlsx"
+write_xlsx(all_orgs_ms, filepath)
+
+all_orgs_ms <- all_orgs_ms %>% filter(!is.na(X.Mission.Statement..))
+
+# create subsets
+partner_ms <- filter(all_orgs_ms, partnering==1)
+
+non_partner_ms <- filter(all_orgs_ms, partnering==0)
+```
+
+
+# Partnering orgs
+```{r}
+# partnering
+partner_ms$X.Mission.Statement.. <- str_remove_all(partner_ms$X.Mission.Statement.., "[[:punct:]]")
+partner_ms$X.Mission.Statement.. <-  str_replace_all(partner_ms$X.Mission.Statement.., "[^[:alnum:]]", " ")
+
+# Create a corpus  
+docs <- data.frame(doc_id = partner_ms$mngentity,
+                   text = partner_ms$X.Mission.Statement..,
+                   stringsAsFactors = FALSE)
+docs <- VCorpus(DataframeSource(docs))
+
+# clean text
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(stemDocument)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+BigramTokenizer <-
+  function(x)
+    unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+
+dtm <- DocumentTermMatrix(docs, control=list(tokenize=BigramTokenizer))
+matrix <- as.matrix(dtm) 
+words <- sort(colSums(matrix), decreasing=TRUE) 
+df <- data.frame(pattern = names(words),freq=words)
+
+# save frequency list to excel
+df %>% write_xlsx('Output/Table_SI2_partnering.xlsx')
+
+my_colors = c("#543005", "#8C510A", "#BF812D", "#DFC27D" ,"#80CDC1", "#35978F", "#01665E", "#003C30")
+# brewer.pal(n = 10, name = "BrBG")
+# c("#543005", "#8C510A", "#BF812D", "#DFC27D", "#F6E8C3" ,"#C7EAE5" ,"#80CDC1", "#35978F", "#01665E", "#003C30")
+# display.brewer.pal(n = 10, name = 'BrBG')
+
+wordcloud(words = df$pattern, freq = df$freq, min.freq = 1, max.words=50, random.order=FALSE, rot.per=0.35, scale = c(2, 0.8), colors=rev(my_colors), family = "sans", font = 2)
+
+# save 
+pdf("Output/Figure_3a.pdf", height=11, width=10)
+wordcloud(words = df$pattern, freq = df$freq, min.freq = 1, max.words=50, random.order=FALSE, rot.per=0.35,scale = c(2, 0.8), colors=rev(my_colors), family = "sans", font = 2)
+dev.off()
+
+# save SI
+pdf("Output/SI_wordcloud_a.pdf", height=11, width=10)
+wordcloud(words = df$pattern, freq = df$freq, min.freq = 1, max.words=200, random.order=FALSE, rot.per=0.35,scale = c(2, 0.2),colors=rev(my_colors), family = "sans", font = 2)
+dev.off()
+
+```
+
+# Non-partnering orgs
+```{r}
+# non-partnering
+non_partner_ms$X.Mission.Statement.. <- str_remove_all(non_partner_ms$X.Mission.Statement.., "[[:punct:]]")
+non_partner_ms$X.Mission.Statement.. <-  str_replace_all(non_partner_ms$X.Mission.Statement.., "[^[:alnum:]]", " ")
+
+# Create a corpus  
+docs <- data.frame(doc_id = non_partner_ms$mngentity,
+                   text = non_partner_ms$X.Mission.Statement..,
+                   stringsAsFactors = FALSE)
+docs <- VCorpus(DataframeSource(docs))
+
+# clean text
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(stemDocument)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+BigramTokenizer <-
+  function(x)
+    unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+
+dtm <- DocumentTermMatrix(docs, control=list(tokenize=BigramTokenizer))
+matrix <- as.matrix(dtm) 
+words <- sort(colSums(matrix), decreasing=TRUE) 
+df <- data.frame(pattern = names(words),freq=words)
+
+# save frequency list to excel
+df %>% write_xlsx('Output/Table_SI2_nonpartnering.xlsx')
+
+
+wordcloud(words = df$pattern, freq = df$freq, min.freq = 1, max.words=50, random.order=FALSE, rot.per=0.35,scale = c(2, 0.8), colors=rev(my_colors), family = "sans", font = 2)
+
+# save 
+pdf("Output/Figure_3b.pdf", height=11, width=10)
+wordcloud(words = df$pattern, freq = df$freq, min.freq = 1, max.words=50, random.order=FALSE, rot.per=0.35,scale = c(2, 0.8), colors=rev(my_colors), family = "sans", font = 2)
+dev.off()
+
+# save SI
+pdf("Output/SI_wordcloud_b.pdf", height=11, width=10)
+wordcloud(words = df$pattern, freq = df$freq, min.freq = 1, max.words=200, random.order=FALSE, rot.per=0.35,scale = c(2, 0.2), colors=rev(my_colors), family = "sans", font = 2)
+dev.off()
+
+```
+
+# Pull full list of key phrases, all orgs
+```{r}
+all_orgs_ms$X.Mission.Statement.. <- str_remove_all(all_orgs_ms$X.Mission.Statement.., "<")
+all_orgs_ms$X.Mission.Statement.. <- str_remove_all(all_orgs_ms$X.Mission.Statement.., ">")
+all_orgs_ms$X.Mission.Statement.. <- str_remove_all(all_orgs_ms$X.Mission.Statement.., "[[:punct:]]")
+all_orgs_ms$X.Mission.Statement.. <-  str_replace_all(all_orgs_ms$X.Mission.Statement.., "[^[:alnum:]]", " ")
+
+# Create a corpus  
+docs <- data.frame(doc_id = all_orgs_ms$mngentity,
+                   text = all_orgs_ms$X.Mission.Statement..,
+                   stringsAsFactors = FALSE)
+docs <- VCorpus(DataframeSource(docs))
+
+# clean text
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(stemDocument)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+BigramTokenizer <-
+  function(x)
+    unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+
+dtm <- DocumentTermMatrix(docs, control=list(tokenize=BigramTokenizer))
+matrix <- as.matrix(dtm) 
+words <- sort(colSums(matrix), decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+phrases <- tidy(dtm)
+
+phrases <- phrases %>% rename(mngentity = document, freq=count, pattern=term)
+
+phrases <- phrases[order(phrases$freq, decreasing = TRUE),] 
+
+# save frequency list to excel
+phrases %>% write_xlsx('Output/kwic_allorgs_byorg.xlsx')
+df %>% write_xlsx('Output/kwic_allorgs_total.xlsx')
+
+```
+

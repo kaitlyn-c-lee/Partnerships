@@ -1,0 +1,163 @@
+---
+title: "Networks Figures"
+author: "Kaitlyn Lee"
+date: "03-07-2023"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# do not change this chunk
+knitr::opts_chunk$set(echo=T, eval=T, fig.width=6, fig.height=4, warning=F, message=F )
+```
+
+# Load Libraries 
+
+```{r}
+# clear R environment 
+# rm(list = ls())
+
+
+# https://kateto.net/network-visualization
+# https://cambridge-intelligence.com/visualize-large-networks/ 
+# https://cambridge-intelligence.com/introducing-the-powerful-organic-graph-layout/ 
+# https://igraph.org/r/doc/igraph.pdf 
+
+library(pacman)
+p_load(tidyverse, jtools, dplyr, stringr, readxl, pdftools, tm, writexl, pdfsearch, quanteda, NLP, wordcloud, wordcloud2, RColorBrewer, stargazer, texreg, weights, tidytext, igraph, network, sna, ggraph, visNetwork, threejs, networkD3, ndtv, viridis, wesanderson) 
+
+```
+
+
+# 100_acre min networks 
+```{r}
+######################### Number of PAs ###########################################
+ntwk1 = read_excel('Data/CA_PAs_interaction_rfftyp_N_diagpship_100acremin.xlsx')
+node_names = c(colnames(ntwk1))
+
+keeps <- c(node_names[-1])
+ntwk1 = ntwk1[keeps]
+
+rownames(ntwk1) <- c(colnames(ntwk1))
+
+# Save as adjacency matrix
+ntwk2 <- as.matrix(ntwk1)
+dim(ntwk2)
+
+net2 <- graph_from_adjacency_matrix(ntwk2, mode = "undirected", weighted = TRUE,
+  diag = FALSE)
+
+node_names = node_names[-1]
+V(net2)$mngentity = node_names
+
+n = length(node_names)
+colrs <- c(RColorBrewer::brewer.pal(n,'Blues'))
+
+node_size = diag(ntwk2)
+ntwk2 = net2
+l <- layout_in_circle(ntwk2)
+V(ntwk2)$size <- node_size/12
+E(ntwk2)$width <- E(ntwk2)$weight/12
+V(ntwk2)$label.color <- "black"
+V(ntwk2)$label.cex = 0.5
+V(ntwk2)$color <- colrs[as.factor(vertex_attr(ntwk2, "mngentity"))]
+V(ntwk2)$frame.color <- V(ntwk2)$color
+E(ntwk2)$color <- "gray"
+E(ntwk2)$arrow.mode <- 0
+plot(ntwk2, layout = l)
+
+pdf(file = "Output/CA_PAs_interaction_rfftyp_N_diagpship_100acremin.pdf")
+plot(ntwk2, layout=l, main = "CA_PAs_interaction_rfftyp_N_diagpship_100acremin")
+legend(x=-1, y=-0.5, c("DIST", "FED", "LOC", "NGO", "PVT", "STAT", "UNK"), pch=21,
+       col="#777777", pt.bg=colrs, pt.cex=2, cex=.8, bty="n", ncol=1)
+dev.off()
+
+
+info = as.data.frame(V(ntwk2)$mngentity)
+
+info$edgeweight = strength(ntwk2, vids = V(ntwk2), mode = c("all", "out", "in", "total"),
+  loops = TRUE)
+
+info$rfftype = V(ntwk2)$type
+
+info$num_edges = igraph::degree(ntwk2)
+
+info$node_size = V(ntwk2)$node_size
+info$label = V(ntwk2)$label
+info$color = V(ntwk2)$color
+
+filepath = "Output/CA_PAs_interaction_rfftyp_N_diagpship_100acremin_info.xlsx"
+write_xlsx(info, filepath)
+
+
+######################### Total area protected ###########################################
+ntwk1 = read_excel('Data/CA_PAs_interaction_rfftyp_acres_diagpship_100acremin.xlsx')
+node_names = c(colnames(ntwk1))
+
+keeps <- c(node_names[-1])
+ntwk1 = ntwk1[keeps]
+
+rownames(ntwk1) <- c(colnames(ntwk1))
+
+# Save as adjacency matrix
+ntwk2 <- as.matrix(ntwk1)
+dim(ntwk2)
+
+net2 <- graph_from_adjacency_matrix(ntwk2, mode = "undirected", weighted = TRUE,
+  diag = FALSE)
+
+node_names = node_names[-1]
+V(net2)$mngentity = node_names
+
+n = length(node_names)
+colrs <- c(RColorBrewer::brewer.pal(n,'Blues'))
+
+node_size = diag(ntwk2)
+ntwk2 = net2
+l <- layout_in_circle(ntwk2)
+V(ntwk2)$size <- node_size/60000
+E(ntwk2)$width <- E(ntwk2)$weight/100000
+V(ntwk2)$label.cex = 0.5
+V(ntwk2)$label.color <- "black"
+V(ntwk2)$color <- colrs[as.factor(vertex_attr(ntwk2, "mngentity"))]
+V(ntwk2)$frame.color <- V(ntwk2)$color
+E(ntwk2)$color <- "gray"
+E(ntwk2)$arrow.mode <- 0
+plot(ntwk2, layout = l)
+
+pdf(file = "Output/CA_PAs_interaction_rfftyp_acres_diagpship_100acremin.pdf")
+plot(ntwk2, layout=l, main = "CA_PAs_interaction_rfftyp_acres_diagpship_100acremin")
+legend(x=-1, y=-0.5, c("DIST", "FED", "LOC", "NGO", "PVT", "STAT", "UNK"), pch=21,
+       col="#777777", pt.bg=colrs, pt.cex=2, cex=.8, bty="n", ncol=1)
+dev.off()
+
+
+info = as.data.frame(V(ntwk2)$mngentity)
+
+info$edgeweight = strength(ntwk2, vids = V(ntwk2), mode = c("all", "out", "in", "total"),
+  loops = TRUE)
+
+info$rfftype = V(ntwk2)$type
+
+info$num_edges = igraph::degree(ntwk2)
+
+info$node_size = V(ntwk2)$node_size
+info$label = V(ntwk2)$label
+info$color = V(ntwk2)$color
+
+filepath = "Output/CA_PAs_interaction_rfftyp_acres_diagpship_100acremin_info.xlsx"
+write_xlsx(info, filepath)
+
+```
+
+
+
+
+
+
+
+
+
